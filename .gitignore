@@ -1,0 +1,28 @@
+# ---- secrets & infra: NEVER commit ----
+.env
+.env.*
+*.env
+docker-compose.yml
+docker-compose.yaml
+compose.yml
+*.sql
+*.sql.gz
+*.dump
+*.bak
+*.backup
+credentials.json
+*credentials*.json
+service-account*.json
+*.pem
+*.key
+*.p12
+id_rsa*
+
+# ---- n8n / node ----
+node_modules/
+.n8n/
+*.log
+
+# ---- OS junk ----
+.DS_Store
+Thumbs.db
