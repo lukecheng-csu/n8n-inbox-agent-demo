@@ -221,8 +221,8 @@
       "parameters": {
         "method": "POST",
         "url": "https://api.deepseek.com/chat/completions",
-        "authentication": "<REDACTED>",
-        "nodeCredentialType": "<REDACTED>",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "deepSeekApi",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.request_body) }}",
@@ -710,7 +710,7 @@
           "__rl": true,
           "cachedResultName": "InboxArchive",
           "mode": "list",
-          "value": "<drive-id>"
+          "value": "<id>"
         },
         "options": {
           "simplifyOutput": false
@@ -732,7 +732,7 @@
           "__rl": true,
           "cachedResultName": "Inbox",
           "mode": "list",
-          "value": "<drive-id>"
+          "value": "<id>"
         },
         "sheetName": {
           "__rl": true,
@@ -1099,8 +1099,8 @@
       "parameters": {
         "method": "POST",
         "url": "https://vision.googleapis.com/v1/files:annotate",
-        "authentication": "<REDACTED>",
-        "genericAuthType": "<REDACTED>",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.vision_request) }}",
@@ -1136,7 +1136,7 @@
     },
     {
       "parameters": {
-        "jsCode": "function toAddress(value) {\n  if (!value) return '';\n  if (typeof value === 'string') return value;\n  if (Array.isArray(value)) return value.length ? toAddress(value[0]) : '';\n  if (typeof value === 'object') {\n    if (typeof value.text === 'string' && value.text) return value.text;\n    if (typeof value.address === 'string' && value.address) return value.address;\n    if (Array.isArray(value.value) && value.value.length) {\n      const first = value.value[0];\n      if (first && typeof first.address === 'string' && first.address) return first.address;\n      if (first && typeof first.text === 'string' && first.text) return first.text;\n    }\n    if (Array.isArray(value.value) && typeof value.value[0] === 'string') return value.value[0];\n  }\n  return '';\n}\n\nconst out = [];\nconst items = $input.all();\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const j = item.json || {};\n  const headers = j.headers || {};\n\n  const from = toAddress(j.from) || toAddress(j.From) || toAddress(headers.from) || toAddress(headers.From) || '<email>';\n\n  let subject = '';\n  if (typeof j.subject === 'string' && j.subject) subject = j.subject;\n  else if (typeof j.Subject === 'string' && j.Subject) subject = j.Subject;\n  else if (typeof headers.subject === 'string' && headers.subject) subject = headers.subject;\n\n  let bodyText = '';\n  if (typeof j.text === 'string' && j.text) bodyText = j.text;\n  else if (typeof j.snippet === 'string' && j.snippet) bodyText = j.snippet;\n\n  let attachmentBase64 = '';\n  let attachmentName = '';\n  let attachmentMimeType = '';\n\n  const bin = item.binary && item.binary.attachment_0;\n  if (bin) {\n    attachmentName = bin.fileName || 'attachment.pdf';\n    attachmentMimeType = bin.mimeType || 'application/pdf';\n    if (bin.data && bin.data !== 'filesystem-v2') {\n      attachmentBase64 = String(bin.data);\n    } else {\n      const buffer = await this.helpers.getBinaryDataBuffer(i, 'attachment_0');\n      attachmentBase64 = buffer.toString('base64');\n    }\n  }\n\n  out.push({ json: { from: from.trim(), subject: subject.trim(), bodyText: bodyText.trim(), attachmentName: attachmentName, attachmentMimeType: attachmentMimeType, attachmentBase64: attachmentBase64 } });\n}\n\nreturn out;"
+        "jsCode": "function toAddress(value) {\n  if (!value) return '';\n  if (typeof value === 'string') return value;\n  if (Array.isArray(value)) return value.length ? toAddress(value[0]) : '';\n  if (typeof value === 'object') {\n    if (typeof value.text === 'string' && value.text) return value.text;\n    if (typeof value.address === 'string' && value.address) return value.address;\n    if (Array.isArray(value.value) && value.value.length) {\n      const first = value.value[0];\n      if (first && typeof first.address === 'string' && first.address) return first.address;\n      if (first && typeof first.text === 'string' && first.text) return first.text;\n    }\n    if (Array.isArray(value.value) && typeof value.value[0] === 'string') return value.value[0];\n  }\n  return '';\n}\n\nconst out = [];\nconst items = $input.all();\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const j = item.json || {};\n  const headers = j.headers || {};\n\n  const from = toAddress(j.from) || toAddress(j.From) || toAddress(headers.from) || toAddress(headers.From) || 'unknown@example.com';\n\n  let subject = '';\n  if (typeof j.subject === 'string' && j.subject) subject = j.subject;\n  else if (typeof j.Subject === 'string' && j.Subject) subject = j.Subject;\n  else if (typeof headers.subject === 'string' && headers.subject) subject = headers.subject;\n\n  let bodyText = '';\n  if (typeof j.text === 'string' && j.text) bodyText = j.text;\n  else if (typeof j.snippet === 'string' && j.snippet) bodyText = j.snippet;\n\n  let attachmentBase64 = '';\n  let attachmentName = '';\n  let attachmentMimeType = '';\n\n  const bin = item.binary && item.binary.attachment_0;\n  if (bin) {\n    attachmentName = bin.fileName || 'attachment.pdf';\n    attachmentMimeType = bin.mimeType || 'application/pdf';\n    if (bin.data && bin.data !== 'filesystem-v2') {\n      attachmentBase64 = String(bin.data);\n    } else {\n      const buffer = await this.helpers.getBinaryDataBuffer(i, 'attachment_0');\n      attachmentBase64 = buffer.toString('base64');\n    }\n  }\n\n  out.push({ json: { from: from.trim(), subject: subject.trim(), bodyText: bodyText.trim(), attachmentName: attachmentName, attachmentMimeType: attachmentMimeType, attachmentBase64: attachmentBase64 } });\n}\n\nreturn out;"
       },
       "id": "2b6a52b9-d585-4753-8104-b28de9dd41e4",
       "name": "Shape Gmail Email",
