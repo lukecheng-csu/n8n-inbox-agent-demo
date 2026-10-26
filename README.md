@@ -89,7 +89,7 @@ n8n-inbox-agent-demo/
 │   └── setup-guide.md        # import, configure, verify
 └── scripts/
     └── sanitize_workflow.py  # strips credentials/pinData before publishing
-```
+![One-page flow](docs/one-page-flow.png)
 
 ## 5. Importing it
 
