@@ -1,0 +1,1678 @@
+{
+  "name": "AI Inbox & Invoice Processing Agent — Approval Queue (Portfolio Demo)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "inbox-agent",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "3c57c011-60fc-4ec0-ba4d-2c5f04b2aafe",
+      "name": "Inbox Webhook (Simulated Gmail)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        -784,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "n-from",
+              "name": "from",
+              "value": "={{ $json.body?.from ?? $json.from ?? \"<email>\" }}",
+              "type": "string"
+            },
+            {
+              "id": "n-subject",
+              "name": "subject",
+              "value": "={{ $json.body?.subject ?? $json.subject ?? \"(no subject)\" }}",
+              "type": "string"
+            },
+            {
+              "id": "n-body",
+              "name": "bodyText",
+              "value": "={{ $json.body?.bodyText ?? $json.bodyText ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "n-name",
+              "name": "attachmentName",
+              "value": "={{ $json.body?.attachmentName ?? $json.attachmentName ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "n-mime",
+              "name": "attachmentMimeType",
+              "value": "={{ $json.body?.attachmentMimeType ?? $json.attachmentMimeType ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "n-b64",
+              "name": "attachmentBase64",
+              "value": "={{ $json.body?.attachmentBase64 ?? $json.attachmentBase64 ?? \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "n-reqid",
+              "name": "requestId",
+              "value": "={{ \"req_\" + $execution.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8f289492-3301-4634-b37a-5dd2f6abf508",
+      "name": "Normalize Email",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -544,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.attachmentBase64 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "965dc21b-2fc3-42b4-873a-abac2bea988d",
+      "name": "Has Attachment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        -288,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toBinary",
+        "sourceProperty": "attachmentBase64",
+        "options": {
+          "fileName": "={{ $json.attachmentName || \"attachment.pdf\" }}"
+        }
+      },
+      "id": "e88d2371-b7d3-4c51-8b5f-813dbdc9bd73",
+      "name": "Attachment to Binary",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -16,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "id": "4d712327-ca09-4871-86e0-716883c90d2a",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.2,
+      "position": [
+        384,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d-att",
+              "name": "document_text",
+              "type": "string",
+              "value": "={{ $json.text || \"\" }}"
+            },
+            {
+              "id": "d-att-empty",
+              "name": "extraction_empty",
+              "type": "boolean",
+              "value": "={{ !$json.text }}"
+            },
+            {
+              "id": "d-att-link",
+              "name": "drive_link",
+              "type": "string",
+              "value": "={{ $json.webViewLink || \"\" }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3d5184b4-534c-4811-98bf-a42b4ff06d25",
+      "name": "Document Text (Attachment)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        512,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const doc = $input.first().json;\nconst mail = $('Normalize Email').first().json;\n\nconst documentText = String(doc.document_text || '').slice(0, 15000);\nconst requestId = String(mail.requestId || ('req_' + $execution.id));\n\nconst systemPrompt = 'You are an email triage engine for an operations inbox. Classify the email and extract fields. '\n  + 'Respond with ONLY one valid JSON object, no markdown. '\n  + 'Schema: {\"email_type\": \"urgent\" | \"request\" | \"invoice\" | \"routine\", '\n  + '\"summary\": one short sentence, '\n  + '\"action_required\": what a human should do next, or empty string, '\n  + '\"sender_name\": string or null, \"vendor\": string or null, \"po_number\": string or null, '\n  + '\"invoice_number\": string or null, \"invoice_date\": \"YYYY-MM-DD\" or null, \"due_date\": \"YYYY-MM-DD\" or null, '\n  + '\"currency\": three-letter code or null, \"amount\": number or null, \"confidence\": number 0-1}. '\n  + 'Rules: invoice = bill, purchase order or remittance; request = someone asking for something; '\n  + 'urgent = deadline, complaint or escalation; routine = newsletter, FYI, notification. '\n  + 'Extract only values present in the email or attachment. Never invent values.';\n\nconst userContent = 'From: ' + mail.from\n  + '\\nSubject: ' + mail.subject\n  + '\\nEmail body: ' + String(mail.bodyText || '').slice(0, 3000)\n  + '\\nAttachment text:\\n' + documentText;\n\nconst requestBody = {\n  model: 'deepseek-chat',\n  temperature: 0,\n  max_tokens: 600,\n  response_format: { type: 'json_object' },\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: userContent }\n  ]\n};\n\nreturn [{ json: { request_body: requestBody, request_id: requestId, document_text: documentText } }];"
+      },
+      "id": "c5ef32db-6b80-494d-b95d-9e5d92cb0e3b",
+      "name": "Build Classify Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d-body",
+              "name": "document_text",
+              "value": "={{ $json.bodyText || \"\" }}",
+              "type": "string"
+            },
+            {
+              "id": "d-body-empty",
+              "name": "extraction_empty",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5c18700d-7f33-4f21-b136-93e7fc60d216",
+      "name": "Document Text (Email Body)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -16,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "authentication": "<REDACTED>",
+        "nodeCredentialType": "<REDACTED>",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request_body) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "0846c20f-4e9e-4ffc-9199-5f0b3d804711",
+      "name": "Classify and Extract (DeepSeek)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1024,
+        304
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const meta = $('Build Classify Request').first().json;\nconst mail = $('Normalize Email').first().json;\nconst raw = $input.first().json;\n\nlet content = '';\nif (raw && raw.choices && raw.choices[0] && raw.choices[0].message) {\n  content = String(raw.choices[0].message.content || '');\n}\n\nlet parsed = null;\nconst start = content.indexOf('{');\nconst end = content.lastIndexOf('}');\nif (start !== -1 && end > start) {\n  try {\n    parsed = JSON.parse(content.slice(start, end + 1));\n  } catch (e) {\n    parsed = null;\n  }\n}\n\nfunction cleanField(value) {\n  if (value === null || value === undefined) return '';\n  return String(value).replace(/[\\r\\n]+/g, ' ').replace(/,/g, ' ').trim();\n}\nfunction cleanDate(value) {\n  const match = String(value || '').match(/^\\d{4}-\\d{2}-\\d{2}$/);\n  return match ? match[0] : '';\n}\nfunction toAmount(value) {\n  const n = Number(String(value === null || value === undefined ? '' : value).replace(/[^0-9.-]/g, ''));\n  return isFinite(n) ? n : 0;\n}\n\nconst allowedTypes = ['urgent', 'request', 'invoice', 'routine'];\nconst errors = [];\n\nif (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {\n  errors.push({ field: 'document', message: 'The AI service did not return a valid JSON object.' });\n}\n\nconst emailType = parsed && parsed.email_type ? cleanField(parsed.email_type).toLowerCase() : '';\nconst summary = parsed ? cleanField(parsed.summary) : '';\n\nif (parsed && allowedTypes.indexOf(emailType) === -1) {\n  errors.push({ field: 'email_type', message: 'Must be one of: urgent, request, invoice, routine. Got \"' + emailType + '\".' });\n}\nif (parsed && !summary) {\n  errors.push({ field: 'summary', message: 'A one-line summary is required.' });\n}\n\nconst invoiceNumber = parsed ? cleanField(parsed.invoice_number) : '';\nconst amount = parsed ? toAmount(parsed.amount) : 0;\nconst invoiceDate = parsed ? cleanDate(parsed.invoice_date) : '';\nconst dueDate = parsed ? cleanDate(parsed.due_date) : '';\n\nlet incomplete = false;\nif (parsed && emailType === 'invoice') {\n  if (!invoiceNumber) incomplete = true;\n  if (amount <= 0) incomplete = true;\n  if (!dueDate && !invoiceDate) incomplete = true;\n}\n\nlet hash = 5381;\nconst hashSource = meta.document_text + '|' + mail.subject;\nfor (let i = 0; i < hashSource.length; i++) {\n  hash = ((hash << 5) + hash + hashSource.charCodeAt(i)) | 0;\n}\n\nconst valid = errors.length === 0;\nconst vendor = parsed ? cleanField(parsed.vendor) : '';\nconst needsApproval = emailType === 'invoice' || emailType === 'request' || emailType === 'urgent';\nconst status = needsApproval ? (incomplete ? 'needs_review' : 'pending_approval') : 'logged';\nconst dedupeKey = valid\n  ? (invoiceNumber\n      ? ('invoice|' + invoiceNumber.toLowerCase())\n      : (emailType + '|hash-' + String(hash)))\n  : '';\nconst archivedFile = valid\n  ? ((emailType + '_' + (invoiceNumber || 'msg') + '_' + $execution.id + '.txt').replace(/[^0-9A-Za-z._-]/g, '_'))\n  : '';\n\nreturn [{\n  json: {\n    valid: valid,\n    errors: errors,\n    incomplete: incomplete,\n    request_id: meta.request_id,\n    message_type: emailType,\n    is_urgent: emailType === 'urgent',\n    sender: cleanField(mail.from),\n    subject: cleanField(mail.subject),\n    sender_name: parsed ? cleanField(parsed.sender_name) : '',\n    summary: summary,\n    action_required: parsed ? cleanField(parsed.action_required) : '',\n    vendor: vendor,\n    po_number: parsed ? cleanField(parsed.po_number) : '',\n    invoice_number: invoiceNumber,\n    invoice_date: invoiceDate,\n    due_date: dueDate,\n    amount: amount,\n    currency: parsed ? cleanField(parsed.currency).toUpperCase() : '',\n    confidence: parsed ? Number(parsed.confidence || 0) : 0,\n    needs_approval: needsApproval,\n    status: status,\n    dedupe_key: dedupeKey,\n    archived_file: archivedFile,\n    attachment_name: cleanField(mail.attachmentName),\n    document_text: meta.document_text\n  }\n}];"
+      },
+      "id": "0dd3a94b-6b29-4430-a5a9-cfaccd71545b",
+      "name": "Parse Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ai-code",
+              "name": "statusCode",
+              "value": 502,
+              "type": "number"
+            },
+            {
+              "id": "ai-body",
+              "name": "body",
+              "type": "object",
+              "value": "={{ { status: \"error\", code: \"UPSTREAM_API_ERROR\", message: \"The AI service failed after retries. Please try again later.\", requestId: $(\"Build Classify Request\").item.json.request_id } }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "22bcdebc-aeee-4447-bb3e-3c5037c421dc",
+      "name": "Build AI Error Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1024,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dda9be61-6bd8-4a2b-a115-513e5810dccf",
+      "name": "Parsed OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1552,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "document_text",
+        "options": {
+          "fileName": "={{ $json.archived_file }}"
+        }
+      },
+      "id": "778eef75-4b0b-4734-8824-c4b9975dc04e",
+      "name": "Archive to Text",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1808,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/home/node/.n8n/{{ $binary.data.fileName.trim() }}",
+        "options": {
+          "append": false
+        }
+      },
+      "id": "b54561fe-5aed-434a-9dc8-8f9c8b224feb",
+      "name": "Write Attachment Archive",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        2064,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS inbox_messages (id serial PRIMARY KEY, dedupe_key text UNIQUE NOT NULL, message_type text NOT NULL, is_urgent boolean NOT NULL DEFAULT false, sender text, subject text, vendor text, po_number text, invoice_number text, invoice_date date, due_date date, amount numeric(14,2), currency text, summary text, action_required text, needs_approval boolean NOT NULL DEFAULT false, status text NOT NULL DEFAULT 'logged', approval_note text, attachment_name text, archived_file text, processed boolean NOT NULL DEFAULT false, processed_at timestamptz, received_at timestamptz NOT NULL DEFAULT now());",
+        "options": {}
+      },
+      "id": "13a31b3d-335d-4c4f-a4fc-11648bb32449",
+      "name": "Ensure Inbox Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2320,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*)::int AS existing FROM inbox_messages WHERE dedupe_key = $1",
+        "options": {
+          "queryReplacement": "={{ $(\"Parse Classification\").item.json.dedupe_key }}"
+        }
+      },
+      "id": "4d490ba3-c15e-4fd2-828a-3c824f857a7d",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2592,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.existing }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "627a8a52-4320-4b9e-bbe8-0306091bb97d",
+      "name": "Is Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        2848,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dup-code",
+              "name": "statusCode",
+              "value": 409,
+              "type": "number"
+            },
+            {
+              "id": "dup-body",
+              "name": "body",
+              "type": "object",
+              "value": "={{ { status: \"skipped\", code: \"DUPLICATE_MESSAGE\", message: \"This message was already recorded.\", messageType: $(\"Parse Classification\").item.json.message_type, requestId: $(\"Parse Classification\").item.json.request_id } }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bf8d8437-a4f6-4ccb-a181-cfa96c39d685",
+      "name": "Build Duplicate Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        3104,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO inbox_messages (dedupe_key, message_type, is_urgent, sender, subject, vendor, po_number, invoice_number, invoice_date, due_date, amount, currency, summary, action_required, needs_approval, status, attachment_name, archived_file) VALUES (NULLIF($1,'__NULL__'), NULLIF($2,'__NULL__'), $3::boolean, NULLIF($4,'__NULL__'), NULLIF($5,'__NULL__'), NULLIF($6,'__NULL__'), NULLIF($7,'__NULL__'), NULLIF($8,'__NULL__'), NULLIF($9,'__NULL__')::date, NULLIF($10,'__NULL__')::date, $11::numeric, NULLIF($12,'__NULL__'), NULLIF($13,'__NULL__'), NULLIF($14,'__NULL__'), $15::boolean, NULLIF($16,'__NULL__'), NULLIF($17,'__NULL__'), NULLIF($18,'__NULL__')) RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$(\"Parse Classification\").item.json.dedupe_key, $(\"Parse Classification\").item.json.message_type, $(\"Parse Classification\").item.json.is_urgent, $(\"Parse Classification\").item.json.sender, $(\"Parse Classification\").item.json.subject, $(\"Parse Classification\").item.json.vendor, $(\"Parse Classification\").item.json.po_number, $(\"Parse Classification\").item.json.invoice_number, $(\"Parse Classification\").item.json.invoice_date, $(\"Parse Classification\").item.json.due_date, $(\"Parse Classification\").item.json.amount, $(\"Parse Classification\").item.json.currency, $(\"Parse Classification\").item.json.summary, $(\"Parse Classification\").item.json.action_required, $(\"Parse Classification\").item.json.needs_approval, $(\"Parse Classification\").item.json.status, $(\"Parse Classification\").item.json.attachment_name, $(\"Parse Classification\").item.json.archived_file].map(function (v) { return (v === '' || v === null || v === undefined) ? '__NULL__' : v; }).join(',') }}",
+          "replaceEmptyStrings": false
+        }
+      },
+      "id": "86c879e1-ab08-4ed7-a28f-2af740bba2e7",
+      "name": "Insert Inbox Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        3104,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok-code",
+              "name": "statusCode",
+              "type": "number",
+              "value": 200
+            },
+            {
+              "id": "ok-body",
+              "name": "body",
+              "type": "object",
+              "value": "={{ { status: \"received\", messageId: $(\"Insert Inbox Message\").item.json.id, messageType: $(\"Parse Classification\").item.json.message_type, isUrgent: $(\"Parse Classification\").item.json.is_urgent, needsApproval: $(\"Parse Classification\").item.json.needs_approval, needsReview: $(\"Parse Classification\").item.json.incomplete, approvalStatus: $(\"Parse Classification\").item.json.status, summary: $(\"Parse Classification\").item.json.summary, archivedFile: $(\"Parse Classification\").item.json.archived_file, driveLink: ($(\"Upload to Google Drive\").isExecuted ? ($(\"Upload to Google Drive\").item.json.webViewLink || \"\") : \"\"), requestId: $(\"Parse Classification\").item.json.request_id } }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d792292b-70d0-4313-b17f-5d45f3511fd1",
+      "name": "Build Success Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        3360,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $(\"Parse Classification\").item.json.is_urgent }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0483a74b-55ba-4fa9-95f8-306076eb17be",
+      "name": "Is Urgent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        3632,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "dd719506-12f2-4c8e-b128-6ef250d9d57a",
+      "name": "Respond to Client",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        4144,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "pe-code",
+              "name": "statusCode",
+              "value": 422,
+              "type": "number"
+            },
+            {
+              "id": "pe-body",
+              "name": "body",
+              "type": "object",
+              "value": "={{ { status: \"error\", code: \"CLASSIFICATION_FAILED\", message: \"The email could not be classified automatically.\", errors: $(\"Parse Classification\").item.json.errors, requestId: $(\"Parse Classification\").item.json.request_id } }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bd5fc583-1a82-4436-985c-53142121f0a0",
+      "name": "Build Parse Error Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1808,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "21a99ba5-c094-4781-bfc7-76d9f0825988",
+      "name": "Morning Digest (Daily 08:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -784,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT message_type, status, COUNT(*)::int AS total FROM inbox_messages WHERE received_at > now() - interval '24 hours' GROUP BY message_type, status ORDER BY message_type",
+        "options": {}
+      },
+      "id": "ead67015-7a48-4a01-8792-14a8590102ed",
+      "name": "Digest Query (last 24h)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -544,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(function (item) { return item.json; });\nlet total = 0;\nconst lines = [];\nfor (const row of rows) {\n  const count = Number(row.total || 0);\n  total += count;\n  lines.push('- ' + row.message_type + ' (' + row.status + '): ' + count);\n}\nif (lines.length === 0) lines.push('- no messages in the last 24 hours');\n\nreturn [{\n  json: {\n    subject: 'Morning inbox digest: ' + total + ' message(s) in the last 24h',\n    body: 'Inbox digest for the last 24 hours\\n\\n' + lines.join('\\n') + '\\n\\nItems marked pending_approval are waiting for a human decision.',\n    generated_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "0ba40109-781c-4d33-a548-5635ee4348f8",
+      "name": "Build Digest Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -288,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "0fc0e01f-22b1-4a17-a988-7e5e52c1e1ee",
+      "name": "Approval Poller (Every 10 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -784,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT q.id AS queue_id, q.message_id, q.summary, q.action_required, i.message_type, i.amount, i.currency FROM approval_queue q JOIN inbox_messages i ON i.id = q.message_id WHERE q.status = 'approved' AND q.processed = false ORDER BY q.id LIMIT 20",
+        "options": {}
+      },
+      "id": "b49d7b85-473d-496e-ba37-fc4fe31d50ce",
+      "name": "Fetch Approved Items",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -544,
+        1008
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "635fff61-fbc1-4763-9020-0b01e0a3f323",
+      "name": "Execute Approved Action (configure)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -288,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE approval_queue SET processed = true, processed_at = now() WHERE id = $1",
+        "options": {
+          "queryReplacement": "={{ $json.queue_id }}"
+        }
+      },
+      "id": "a2d7008e-fdee-4853-9f4d-341e8fc21bb6",
+      "name": "Mark Processed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -16,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## AI Inbox & Invoice Processing Agent (Portfolio Demo)\nPOST /webhook/inbox-agent  —  body: { from, subject, bodyText, attachmentName, attachmentBase64 }\n\nONE-PAGE FLOW (matches the brief):\n1 Shared inbox (Gmail / IMAP)\n2 Read PDF attachments, incl. scanned (OCR)\n3 Classify: urgent / request / invoice / routine\n4 Extract: sender, PO/invoice no., amount, due date\n5 Validation  -> fails -> Needs review (human queue, nothing dropped)\n6 Duplicate check -> already seen -> Duplicate (skipped, no second record)\n7 Write one row: Google Sheets or Airtable\n8 Save attachment: Google Drive, linked to the row\n9 Money or outgoing?  -> no -> Recorded only\n10 Approval queue (pending a human decision)\n11 Human OK -> send / pay\n\nALERTS & RELIABILITY: Slack alert for urgent items; morning summary once a day; retries before alerting; failure alerts via the Error Trigger workflow.\nLOGGING: every step is written to the execution log (n8n execution history + inbox_messages / approval_queue), so someone else can maintain this. Full runbook: the setup guide.\n\nBEFORE RUNNING: set credentials on Google Drive, Google Sheets, Slack (x2) and Gmail, and pick folder / spreadsheet / channels / recipient. The webhook stands in for Gmail Trigger / IMAP in production.",
+        "height": 448,
+        "width": 3808,
+        "color": 4
+      },
+      "id": "25513f13-feb0-4a62-a4b9-6bae01e80793",
+      "name": "Sticky Note c477293e",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -576,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $(\"Normalize Email\").item.json.attachmentName || \"attachment.pdf\" }}",
+        "driveId": {
+          "__rl": true,
+          "cachedResultName": "My Drive",
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "cachedResultName": "InboxArchive",
+          "mode": "list",
+          "value": "<drive-id>"
+        },
+        "options": {
+          "simplifyOutput": false
+        }
+      },
+      "id": "627a3871-5ee3-4aad-940f-5e1ca4ccb6d7",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        64,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "cachedResultName": "Inbox",
+          "mode": "list",
+          "value": "<drive-id>"
+        },
+        "sheetName": {
+          "__rl": true,
+          "cachedResultName": "工作表1",
+          "mode": "list",
+          "value": "gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "schema": [
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "received_at",
+              "id": "received_at",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "message_type",
+              "id": "message_type",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "sender",
+              "id": "sender",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "subject",
+              "id": "subject",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "vendor",
+              "id": "vendor",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "po_number",
+              "id": "po_number",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "invoice_number",
+              "id": "invoice_number",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "invoice_date",
+              "id": "invoice_date",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "due_date",
+              "id": "due_date",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "amount",
+              "id": "amount",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "currency",
+              "id": "currency",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "summary",
+              "id": "summary",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "action_required",
+              "id": "action_required",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "status",
+              "id": "status",
+              "required": false,
+              "type": "string"
+            },
+            {
+              "canBeUsedToMatch": true,
+              "defaultMatch": false,
+              "display": true,
+              "displayName": "drive_link",
+              "id": "drive_link",
+              "required": false,
+              "type": "string"
+            }
+          ],
+          "value": {
+            "action_required": "={{ $(\"Parse Classification\").item.json.action_required }}",
+            "amount": "={{ $(\"Parse Classification\").item.json.amount }}",
+            "currency": "={{ $(\"Parse Classification\").item.json.currency }}",
+            "drive_link": "={{ $(\"Upload to Google Drive\").isExecuted ? ($(\"Upload to Google Drive\").item.json.webViewLink || \"\") : \"\" }}",
+            "due_date": "={{ $(\"Parse Classification\").item.json.due_date }}",
+            "invoice_date": "={{ $(\"Parse Classification\").item.json.invoice_date }}",
+            "invoice_number": "={{ $(\"Parse Classification\").item.json.invoice_number }}",
+            "message_type": "={{ $(\"Parse Classification\").item.json.message_type }}",
+            "po_number": "={{ $(\"Parse Classification\").item.json.po_number }}",
+            "received_at": "={{ $now.toISO() }}",
+            "sender": "={{ $(\"Parse Classification\").item.json.sender }}",
+            "status": "={{ $(\"Parse Classification\").item.json.status }}",
+            "subject": "={{ $(\"Parse Classification\").item.json.subject }}",
+            "summary": "={{ $(\"Parse Classification\").item.json.summary }}",
+            "vendor": "={{ $(\"Parse Classification\").item.json.vendor }}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "e151a099-8b43-41bb-9759-52b0787d1a7f",
+      "name": "Append to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3392,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $(\"Parse Classification\").item.json.needs_approval }}",
+              "operator": {
+                "operation": "true",
+                "singleValue": true,
+                "type": "boolean"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "id": "689f257f-2ed8-4a1d-b199-8ebb6bfba03d",
+      "name": "Needs Approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        3648,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "CREATE TABLE IF NOT EXISTS approval_queue (id serial PRIMARY KEY, message_id integer REFERENCES inbox_messages(id), message_type text, summary text, action_required text, status text NOT NULL DEFAULT 'pending', reviewer text, decided_at timestamptz, processed boolean NOT NULL DEFAULT false, processed_at timestamptz, created_at timestamptz NOT NULL DEFAULT now());",
+        "options": {}
+      },
+      "id": "23713731-df28-4b5c-9681-23127ab90015",
+      "name": "Ensure Approval Queue Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        3904,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO approval_queue (message_id, message_type, summary, action_required, status) VALUES (NULLIF($1,'__NULL__')::integer, NULLIF($2,'__NULL__'), NULLIF($3,'__NULL__'), NULLIF($4,'__NULL__'), 'pending') RETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$(\"Insert Inbox Message\").item.json.id, $(\"Parse Classification\").item.json.message_type, $(\"Parse Classification\").item.json.summary, $(\"Parse Classification\").item.json.action_required].map(function (v) { return (v === '' || v === null || v === undefined) ? '__NULL__' : v; }).join(',') }}"
+        }
+      },
+      "id": "eb23033f-f8d6-45d0-8613-b2736729938e",
+      "name": "Add to Approval Queue",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        4160,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "cachedResultName": "inbox-approvals",
+          "mode": "list",
+          "value": "C0CBSV77M27"
+        },
+        "text": "={{ \"Approval needed — \" + $(\"Parse Classification\").item.json.message_type + \"\\n\" + $(\"Parse Classification\").item.json.summary + \"\\nAction: \" + $(\"Parse Classification\").item.json.action_required + \"\\nQueue ID: \" + $json.id }}",
+        "otherOptions": {}
+      },
+      "id": "97a7722e-38b5-4751-ac15-453c24f439f6",
+      "name": "Notify Approver (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        4432,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "cachedResultName": "inbox-urgent",
+          "mode": "list",
+          "value": "C0CC2TB9Q3W"
+        },
+        "text": "={{ $(\"Parse Classification\").item.json.subject + \"\\nFrom: \" + $(\"Parse Classification\").item.json.sender + \"\\n\" + $(\"Parse Classification\").item.json.summary }}",
+        "otherOptions": {}
+      },
+      "id": "e4407bb3-e50e-47b0-be04-2a7675faa895",
+      "name": "Alert on Urgent (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        3888,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "<email>",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "b47b6697-06f5-472b-80fe-643a965322ba",
+      "name": "Send Morning Summary (Gmail)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        768
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "2b182ee1-42c4-4e01-a16e-34f4487556aa",
+      "name": "Merge Drive and Text",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        528,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.document_text }}",
+              "operator": {
+                "operation": "notEmpty",
+                "singleValue": true,
+                "type": "string"
+              },
+              "rightValue": ""
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "id": "913ee861-8faf-41d7-a307-cf7839dc80cb",
+      "name": "Text Extracted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        768,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const mail = $('Normalize Email').first().json;\nconst content = String(mail.attachmentBase64 || '');\nconst mimeType = String(mail.attachmentMimeType || 'application/pdf');\n\nif (!content) {\n  return [{ json: { vision_request: null } }];\n}\n\nreturn [{ json: { vision_request: { requests: [ { inputConfig: { content: content, mimeType: mimeType }, features: [ { type: 'DOCUMENT_TEXT_DETECTION' } ] } ] } } }];"
+      },
+      "id": "7bc38fff-a791-4734-88e2-6268a3bb792c",
+      "name": "Build Vision Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -64
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://vision.googleapis.com/v1/files:annotate",
+        "authentication": "<REDACTED>",
+        "genericAuthType": "<REDACTED>",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.vision_request) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "7018301e-23f9-4636-b4f3-abddae864bef",
+      "name": "Call Vision OCR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1280,
+        -64
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\n\nlet text = '';\ntry {\n  const pages = raw && raw.responses && raw.responses[0] && raw.responses[0].responses;\n  if (Array.isArray(pages)) {\n    text = pages.map(function (page) {\n      if (!page) return '';\n      if (page.fullTextAnnotation && page.fullTextAnnotation.text) return page.fullTextAnnotation.text;\n      return '';\n    }).filter(Boolean).join('\\n');\n  }\n} catch (e) {\n  text = '';\n}\n\ntext = String(text || '').trim();\n\nreturn [{ json: { document_text: text, extraction_empty: !text, ocr_used: true } }];"
+      },
+      "id": "e9ee0576-deef-43da-af32-c167a3d97da7",
+      "name": "Parse Vision Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        -64
+      ]
+    }
+  ],
+  "connections": {
+    "Inbox Webhook (Simulated Gmail)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Email": {
+      "main": [
+        [
+          {
+            "node": "Has Attachment?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Attachment?": {
+      "main": [
+        [
+          {
+            "node": "Attachment to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Document Text (Email Body)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Text (Email Body)": {
+      "main": [
+        [
+          {
+            "node": "Build Classify Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify and Extract (DeepSeek)": {
+      "main": [
+        [
+          {
+            "node": "Parse Classification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build AI Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Classification": {
+      "main": [
+        [
+          {
+            "node": "Parsed OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Error Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsed OK?": {
+      "main": [
+        [
+          {
+            "node": "Archive to Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Parse Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Archive to Text": {
+      "main": [
+        [
+          {
+            "node": "Write Attachment Archive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Attachment Archive": {
+      "main": [
+        [
+          {
+            "node": "Ensure Inbox Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Inbox Table": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Build Duplicate Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Inbox Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Duplicate Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Success Response": {
+      "main": [
+        [
+          {
+            "node": "Is Urgent?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Urgent?": {
+      "main": [
+        [
+          {
+            "node": "Alert on Urgent (Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Parse Error Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Morning Digest (Daily 08:00)": {
+      "main": [
+        [
+          {
+            "node": "Digest Query (last 24h)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Digest Query (last 24h)": {
+      "main": [
+        [
+          {
+            "node": "Build Digest Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approval Poller (Every 10 min)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Approved Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Approved Items": {
+      "main": [
+        [
+          {
+            "node": "Execute Approved Action (configure)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Approved Action (configure)": {
+      "main": [
+        [
+          {
+            "node": "Mark Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Classify Request": {
+      "main": [
+        [
+          {
+            "node": "Classify and Extract (DeepSeek)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Inbox Message": {
+      "main": [
+        [
+          {
+            "node": "Append to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Needs Approval?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Approval?": {
+      "main": [
+        [
+          {
+            "node": "Ensure Approval Queue Table",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ensure Approval Queue Table": {
+      "main": [
+        [
+          {
+            "node": "Add to Approval Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Approval Queue": {
+      "main": [
+        [
+          {
+            "node": "Notify Approver (Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Approver (Slack)": {
+      "main": [
+        [
+          {
+            "node": "Build Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert on Urgent (Slack)": {
+      "main": [
+        [
+          {
+            "node": "Respond to Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest Email": {
+      "main": [
+        [
+          {
+            "node": "Send Morning Summary (Gmail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attachment to Binary": {
+      "main": [
+        [
+          {
+            "node": "Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Merge Drive and Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Merge Drive and Text",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Drive and Text": {
+      "main": [
+        [
+          {
+            "node": "Document Text (Attachment)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Text (Attachment)": {
+      "main": [
+        [
+          {
+            "node": "Text Extracted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Extracted?": {
+      "main": [
+        [
+          {
+            "node": "Build Classify Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Vision Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Vision Request": {
+      "main": [
+        [
+          {
+            "node": "Call Vision OCR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Vision OCR": {
+      "main": [
+        [
+          {
+            "node": "Parse Vision Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Vision Text": {
+      "main": [
+        [
+          {
+            "node": "Build Classify Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true,
+    "errorWorkflow": "dFCt5kEqVirqyfg3"
+  },
+  "versionId": "4d8e5d8e-1f0f-4fec-b02b-f4af14c7c2b2",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "nodeGroups": [
+    {
+      "id": "d20649ba-d146-467c-9330-d338b16079d6",
+      "name": "1. Dedupe and storage",
+      "nodeIds": [
+        "13a31b3d-335d-4c4f-a4fc-11648bb32449",
+        "4d490ba3-c15e-4fd2-828a-3c824f857a7d"
+      ],
+      "description": "Creates the table if needed and checks the unique dedupe key before writing."
+    },
+    {
+      "id": "b3f0a29a-5d19-4a9e-a625-d9665cd79f99",
+      "name": "2. Morning digest",
+      "nodeIds": [
+        "ead67015-7a48-4a01-8792-14a8590102ed",
+        "0ba40109-781c-4d33-a548-5635ee4348f8"
+      ],
+      "description": "Counts the last 24 hours by type and status and composes the summary email."
+    },
+    {
+      "id": "9d93a4b8-1b16-436a-b5f8-5f177c214ac8",
+      "name": "3. Approval gate",
+      "nodeIds": [
+        "b49d7b85-473d-496e-ba37-fc4fe31d50ce",
+        "635fff61-fbc1-4763-9020-0b01e0a3f323",
+        "a2d7008e-fdee-4853-9f4d-341e8fc21bb6"
+      ],
+      "description": "Only rows a human set to approved get an action, and each is marked processed afterwards."
+    }
+  ],
+  "id": "ZmKrN6UkZfjttMZh",
+  "tags": []
+}
