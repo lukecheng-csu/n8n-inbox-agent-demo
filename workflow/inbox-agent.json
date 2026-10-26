@@ -1133,6 +1133,64 @@
         1552,
         -64
       ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function toAddress(value) {\n  if (!value) return '';\n  if (typeof value === 'string') return value;\n  if (Array.isArray(value)) return value.length ? toAddress(value[0]) : '';\n  if (typeof value === 'object') {\n    if (typeof value.text === 'string' && value.text) return value.text;\n    if (typeof value.address === 'string' && value.address) return value.address;\n    if (Array.isArray(value.value) && value.value.length) {\n      const first = value.value[0];\n      if (first && typeof first.address === 'string' && first.address) return first.address;\n      if (first && typeof first.text === 'string' && first.text) return first.text;\n    }\n    if (Array.isArray(value.value) && typeof value.value[0] === 'string') return value.value[0];\n  }\n  return '';\n}\n\nconst out = [];\nconst items = $input.all();\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const j = item.json || {};\n  const headers = j.headers || {};\n\n  const from = toAddress(j.from) || toAddress(j.From) || toAddress(headers.from) || toAddress(headers.From) || '<email>';\n\n  let subject = '';\n  if (typeof j.subject === 'string' && j.subject) subject = j.subject;\n  else if (typeof j.Subject === 'string' && j.Subject) subject = j.Subject;\n  else if (typeof headers.subject === 'string' && headers.subject) subject = headers.subject;\n\n  let bodyText = '';\n  if (typeof j.text === 'string' && j.text) bodyText = j.text;\n  else if (typeof j.snippet === 'string' && j.snippet) bodyText = j.snippet;\n\n  let attachmentBase64 = '';\n  let attachmentName = '';\n  let attachmentMimeType = '';\n\n  const bin = item.binary && item.binary.attachment_0;\n  if (bin) {\n    attachmentName = bin.fileName || 'attachment.pdf';\n    attachmentMimeType = bin.mimeType || 'application/pdf';\n    if (bin.data && bin.data !== 'filesystem-v2') {\n      attachmentBase64 = String(bin.data);\n    } else {\n      const buffer = await this.helpers.getBinaryDataBuffer(i, 'attachment_0');\n      attachmentBase64 = buffer.toString('base64');\n    }\n  }\n\n  out.push({ json: { from: from.trim(), subject: subject.trim(), bodyText: bodyText.trim(), attachmentName: attachmentName, attachmentMimeType: attachmentMimeType, attachmentBase64: attachmentBase64 } });\n}\n\nreturn out;"
+      },
+      "id": "2b6a52b9-d585-4753-8104-b28de9dd41e4",
+      "name": "Shape Gmail Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "03c3a003-7b6a-4902-b787-15d17376a5c0",
+      "name": "Check Inbox (Every minute)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -784,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 1,
+        "simple": false,
+        "filters": {
+          "includeSpamTrash": true,
+          "q": "DEMO",
+          "readStatus": "both",
+          "receivedAfter": "={{ $now.minus({ minutes: 2 }).toISO() }}"
+        },
+        "options": {
+          "dataPropertyAttachmentsPrefixName": "attachment_",
+          "downloadAttachments": true
+        }
+      },
+      "id": "e690844d-8781-4d0e-a762-a0c66b4ebb66",
+      "name": "Fetch Demo Emails",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -544,
+        48
+      ]
     }
   ],
   "connections": {
@@ -1629,6 +1687,39 @@
           }
         ]
       ]
+    },
+    "Shape Gmail Email": {
+      "main": [
+        [
+          {
+            "node": "Normalize Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Inbox (Every minute)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Demo Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Demo Emails": {
+      "main": [
+        [
+          {
+            "node": "Shape Gmail Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": true,
@@ -1638,7 +1729,7 @@
     "availableInMCP": true,
     "errorWorkflow": "dFCt5kEqVirqyfg3"
   },
-  "versionId": "4d8e5d8e-1f0f-4fec-b02b-f4af14c7c2b2",
+  "versionId": "5b4386d7-eefa-4abc-a518-f7bdfa4a7f83",
   "meta": {
     "aiBuilderAssisted": true,
     "builderVariant": "mcp"
