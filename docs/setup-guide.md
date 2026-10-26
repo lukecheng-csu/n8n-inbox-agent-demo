@@ -7,69 +7,50 @@ to import, configure and verify the workflow yourself.
 
 ## A. Capturing the evidence
 
-All captures happen on your own machine. Recommended order and targets:
-
 | # | File | What to capture | Where |
 | --- | --- | --- | --- |
-| 01 | `01-Canvas.png` | Full canvas, zoomed to fit one screen | n8n workflow page |
+| 01 | `01-Canvas.png` | Full canvas, zoomed to fit one screen (both intake paths visible) | n8n workflow page |
 | 02 | `02-executions.png` | Execution list: green runs + 409 conflicts | n8n → Executions |
 | 03 | `03-ocr-run.png` | One execution: OCR text and classification output | Execution detail |
 | 03b | `03-ocr-run2.png` | The same run, scrolled to the storage nodes | Execution detail |
 | 04 | `04-googlesheet-Inbox.png` | The newest row in the sheet | Google Sheets |
 | 05 | `05-Drive-folder.png` | The archived attachment | Google Drive → InboxArchive |
 | 06 | `06-slack-approval.png` | The approval message | Slack #inbox-approvals |
-| 07 | `07-digest-email.png` | The morning digest | 163 mailbox |
+| 07 | `07-digest-email.png` | The morning digest | mailbox inbox |
 | 08 | `08-approval-queue.png` | Pending vs processed rows in the queue | server terminal |
 
 **Capture rules**
 
-- Browser full screen, bookmarks bar hidden.
+- Browser full screen, bookmarks bar hidden, clean Chrome profile (no work tabs).
 - Terminal: dark theme, font 16–18, window 110–130 characters wide.
 - Export at 1200–1400 px width; keep files under ~500 KB for Upwork.
 - Save with the exact names above so README links resolve.
 
 ### Capturing 08 — the approval queue
 
-This is the direct evidence for "nothing is sent without a human OK": rows sit in
-`pending` until someone approves them, and only then does the poller act.
-
-Step 1 — see the queue:
-
 ```bash
 docker exec n8n-postgres psql -U n8n_admin -d n8n_prod \
   -P border=2 -P pager=off \
-  -c "SELECT id, message_id, message_type, status,
-             (reviewer IS NOT NULL) AS reviewed,
-             processed,
-             created_at::timestamp(0) AS created
-      FROM approval_queue ORDER BY id;"
+  -c "SELECT q.id AS queue_id, q.message_type, q.status, q.processed,
+             left(i.summary, 48) AS summary
+      FROM approval_queue q
+      JOIN inbox_messages i ON i.id = q.message_id
+      ORDER BY q.id;"
 ```
 
-Step 2 — show the gate doing its job (pending vs processed):
-
-```bash
-docker exec n8n-postgres psql -U n8n_admin -d n8n_prod \
-  -P border=2 -P pager=off \
-  -c "SELECT status, processed, count(*)
-      FROM approval_queue GROUP BY status, processed ORDER BY status;"
-```
-
-A good screenshot shows both states: at least one row that has been approved and
+A good screenshot shows both states: at least one row approved with
 `processed = true`, and at least one still `pending` / `processed = false`.
-
-Do **not** run `docker exec n8n-core printenv` in a screenshot — it prints the
-database password.
 
 ---
 
 ## B. Import and configure
 
 1. n8n → **Workflows → Import from file** → `workflow/inbox-agent.json`.
-2. Credentials are intentionally absent; nodes will show missing-credential
-   warnings. Create these:
+2. Credentials are intentionally absent. Create these:
 
    | Node(s) | Credential type | Notes |
    | --- | --- | --- |
+   | Fetch Demo Emails | Gmail OAuth2 API | needs read access, not just send |
    | Upload to Google Drive | Google Drive OAuth2 API | pick the archive folder |
    | Append to Google Sheets | Google Sheets OAuth2 API | pick spreadsheet + sheet |
    | Send Morning Summary | Gmail OAuth2 API | set the recipient |
@@ -79,13 +60,29 @@ database password.
 
 3. Set the Drive folder, spreadsheet, sheet name, both Slack channels and the
    digest recipient.
-4. Publish. Production endpoint: `POST /webhook/inbox-agent`.
+4. Publish. Webhook: `POST /webhook/inbox-agent`. The Gmail poll starts immediately.
 
-### Node map (for whoever maintains this)
+### The Gmail intake
+
+| Setting | Value in this demo | Why |
+| --- | --- | --- |
+| Trigger | Schedule, every minute | Polling triggers reset their cursor on every publish and silently skip mail that arrived just before; a schedule is deterministic and can be run manually |
+| Query | `DEMO` | Matches the subject/body convention used for the walkthrough |
+| Lookback | `receivedAfter = now − 2 minutes` | Keeps each email inside the window long enough to be picked up once, then out of it |
+| Read status | `both` | Read or unread, the dedupe key protects against reprocessing |
+| Spam | `includeSpamTrash: true` | Test mail from a personal address often lands in Spam — **demo only, turn this off in production** |
+| Limit | 1 | One email per poll keeps item pairing simple downstream |
+
+To adapt it to a real inbox, change the query to something like
+`subject:invoice has:attachment`, widen the lookback, and set `includeSpamTrash`
+to false.
+
+### Node map
 
 | Stage | Nodes |
 | --- | --- |
-| Intake | Inbox Webhook → Normalize Email → Has Attachment? |
+| Gmail intake | Check Inbox (Every minute) → Fetch Demo Emails → Shape Gmail Email |
+| Webhook intake | Inbox Webhook → Normalize Email |
 | Attachment | Attachment to Binary → Upload to Google Drive → Extract PDF Text → Merge Drive and Text |
 | OCR fallback | Text Extracted? → Build Vision Request → Call Vision OCR → Parse Vision Text |
 | Classification | Build Classify Request → Classify and Extract (DeepSeek) → Parse Classification → Parsed OK? |
@@ -109,7 +106,7 @@ no failed nodes.
 
 ```sql
 -- (a) the newest inbound record
-SELECT id, message_type, status, dedupe_key, summary
+SELECT id, message_type, status, dedupe_key, sender, summary
 FROM inbox_messages ORDER BY id DESC LIMIT 1;
 
 -- (b) its approval-queue row
@@ -123,15 +120,10 @@ WHERE dedupe_key = '<dedupe_key from (a)>'
 -- expect: 0 rows
 ```
 
-All three must pass. The unique constraint on `dedupe_key` is the real guard; the
-query is how you show it held.
-
 ### 3. Three-way match
 
 The newest **Google Sheet** row, the archived **Drive** file and the **Slack**
 message must describe the same record (sender, subject, timestamp).
-
-> Three-way match = "email → storage → approval" is fully working end to end.
 
 ---
 
@@ -139,7 +131,7 @@ message must describe the same record (sender, subject, timestamp).
 
 - [ ] `scripts/sanitize_workflow.py` run on a fresh export (`--aggressive`)
 - [ ] `grep -riE "token|secret|password|api_key|xoxb|AIza" .` returns nothing harmful
-- [ ] `.env`, `docker-compose.yml`, `*.sql` dumps are **not** in the repo
-- [ ] README links resolve: every `screenshots/*.png` path exists
+- [ ] `.env`, `docker-compose.yml`, `*.sql` dumps and SSH keys are **not** in the repo
+- [ ] Every `screenshots/*.png` path referenced in README exists
 - [ ] `docs/one-page-flow.png` present
 - [ ] No placeholder text left (`[your-loom-link]`, `<REDACTED>` in docs)

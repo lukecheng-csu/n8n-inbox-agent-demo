@@ -11,6 +11,29 @@ Google Drive, the team gets a Slack message, and a daily digest is emailed out.
 
 ---
 
+## The brief this was built against
+
+> Our operations team spends hours each week reading emails and PDF attachments
+> (invoices, purchase orders, remittances) and typing the details into spreadsheets.
+>
+> We want an AI-assisted workflow that:
+>
+> - Monitors a shared inbox (Gmail or IMAP) and reads PDF attachments, including scanned ones
+> - Classifies each email as urgent, request, invoice, or routine
+> - Extracts key fields (sender, PO or invoice number, amount, due date) into Google Sheets or Airtable
+> - Saves each attachment to an organized Google Drive folder, linked to its record
+> - Sends a Slack alert for urgent items and a short morning summary email
+> - Puts anything involving money or an outgoing message into an "approval queue", so nothing is sent without a human OK
+>
+> Requirements: experience with n8n or Make, an LLM API (Claude or OpenAI), and OCR or PDF
+> extraction. Each workflow needs validation, retries, failure alerts, and duplicate checks.
+> Everything is built in our accounts and documented so someone else can maintain it.
+
+*Source: a public Upwork job posting (October 2026). This repository is an independent
+demo built in response — not a paid client engagement.*
+
+---
+
 ## 1. What problem it solves
 
 A shared inbox is a black hole: emails pile up, attachments get lost, nothing is
@@ -30,7 +53,11 @@ This agent makes the inbox auditable:
 ## 2. How it works
 
 ```
-Webhook (stands in for Gmail/IMAP in production)
+Two intake paths:
+
+  Webhook (POST /webhook/inbox-agent)        ← for integrations and testing
+  Gmail (poll every minute, 2-minute window) ← for a real inbox
+
         │
         ▼
 Has attachment? ── yes ──► Google Drive upload ──► PDF text extraction
@@ -58,24 +85,24 @@ Daily 08:00 → digest query → Gmail  (counts by type and status, last 24h)
 Every 10 min → approval poller → executes only rows a human marked approved
 ```
 
-**Stack:** n8n · PostgreSQL (storage, queue, de-duplication) · Google Sheets API ·
-Google Drive API · Google Vision OCR · DeepSeek (swappable for OpenAI/Claude) ·
-Slack API · Gmail OAuth.
+**Stack:** n8n · PostgreSQL (storage, queue, de-duplication) · Gmail API ·
+Google Sheets API · Google Drive API · Google Vision OCR ·
+DeepSeek (swappable for OpenAI/Claude) · Slack API.
+
+![One-page flow](docs/one-page-flow.png)
 
 ## 3. Requirements → evidence
 
-Each claim is backed by a file in this repo.
-
-| Requirement | Evidence |
-| --- | --- |
-| Real, working workflow (not a mockup) | [`workflow/inbox-agent.json`](workflow/inbox-agent.json) and `screenshots/01-Canvas.png` |
-| Runs repeatedly in practice | `screenshots/02-executions.png` (successful runs and 409 conflicts) |
-| OCR + classification actually execute | `screenshots/03-ocr-run.png`, `screenshots/03-ocr-run2.png` |
-| Data lands in the sheet | `screenshots/04-googlesheet-Inbox.png` |
-| Attachments archived | `screenshots/05-Drive-folder.png` |
-| Approval notification sent | `screenshots/06-slack-approval.png` |
-| Scheduled digest works | `screenshots/07-digest-email.png` |
-| Queue, dedupe and processed flag | `screenshots/08-approval-queue.png` and `docs/setup-guide.md` §C |
+| What the brief asks for | How it is met | Evidence |
+| --- | --- | --- |
+| Monitors a shared inbox (Gmail or IMAP), reads PDFs including scanned ones | Two intake paths: a webhook for integrations, and a Gmail poll (every minute, 2-minute lookback). Scanned PDFs fall back to Google Vision OCR. | `screenshots/01-Canvas.png`, `screenshots/03-ocr-run.png` |
+| Classifies each email as urgent, request, invoice, or routine | One LLM call with a strict JSON schema and a fixed vocabulary. | `screenshots/03-ocr-run.png` |
+| Extracts sender, PO or invoice number, amount, due date into Sheets or Airtable | All four fields plus vendor and currency, appended as one sheet row per email. | `screenshots/04-googlesheet-Inbox.png` |
+| Saves each attachment to a Drive folder, linked to its record | Drive upload runs before text extraction; the sheet row stores the link. | `screenshots/05-Drive-folder.png` |
+| Slack alert for urgent items, short morning summary email | Dedicated `#inbox-urgent` branch, plus a daily 08:00 digest through Gmail. | `screenshots/06-slack-approval.png`, `screenshots/07-digest-email.png` |
+| Approval queue — nothing sent without a human OK | Rows sit in `approval_queue` as `pending`; the poller only acts on rows a person set to `approved`. | `screenshots/08-approval-queue.png` |
+| Validation, retries, failure alerts, duplicate checks | Field validation routes bad extractions to review; API calls retry; a separate Error Trigger workflow raises failures; a unique dedupe key returns 409. | `screenshots/02-executions.png` |
+| Documented so someone else can maintain it | Setup guide with credential table, node map and verification queries. | `docs/setup-guide.md` |
 
 ## 4. Repository layout
 
@@ -84,12 +111,13 @@ n8n-inbox-agent-demo/
 ├── README.md
 ├── workflow/
 │   └── inbox-agent.json      # sanitized export
-├── screenshots/              # canvas, executions, OCR run, sheet, Drive, Slack, digest
+├── screenshots/              # canvas, executions, OCR run, sheet, Drive, Slack, digest, queue
 ├── docs/
-│   └── setup-guide.md        # import, configure, verify
+│   ├── setup-guide.md        # import, configure, verify
+│   └── one-page-flow.png     # one-screen overview
 └── scripts/
     └── sanitize_workflow.py  # strips credentials/pinData before publishing
-![One-page flow](docs/one-page-flow.png)
+```
 
 ## 5. Importing it
 
@@ -98,6 +126,7 @@ n8n-inbox-agent-demo/
 
    | Node | Credential type |
    | --- | --- |
+   | Fetch Demo Emails | Gmail OAuth2 API |
    | Google Drive upload | Google Drive OAuth2 API |
    | Google Sheets append | Google Sheets OAuth2 API |
    | Morning digest | Gmail OAuth2 API |
@@ -106,9 +135,10 @@ n8n-inbox-agent-demo/
    | Database nodes | PostgreSQL |
 
 3. Select the Drive folder, spreadsheet, Slack channels and digest recipient.
-4. Publish, then call `POST /webhook/inbox-agent`.
-
-Full details: [`docs/setup-guide.md`](docs/setup-guide.md).
+4. Adjust the Gmail search query (`DEMO` in this demo) to match your own inbox
+   convention — see §8.
+5. Publish. The webhook is then available at `/webhook/inbox-agent`, and the
+   Gmail poll starts running every minute.
 
 ## 6. Verification
 
@@ -126,7 +156,7 @@ SELECT id, message_type, status, dedupe_key, summary
 FROM inbox_messages ORDER BY id DESC LIMIT 1;
 
 -- its approval row
-SELECT id, message_id, status, processed
+SELECT id, approval_queue.status, processed
 FROM approval_queue ORDER BY id DESC LIMIT 1;
 
 -- dedupe: re-sending the same email must not create a second row
@@ -149,8 +179,19 @@ emails and long account IDs. Never commit `.env`, `docker-compose.yml` or DB dum
 
 ## 8. Known limitations
 
-- The webhook stands in for the inbox; in production it is replaced by a Gmail
-  Trigger or IMAP node. Classification and storage logic are unchanged.
+- **Polling triggers lose mail across a restart.** n8n resets a polling trigger's
+  cursor every time the workflow is published, so anything that arrived just before
+  a publish is skipped. This build avoids the problem by polling on a schedule and
+  querying Gmail directly (`receivedAfter` window) instead of relying on a cursor.
+  In production, the safer pattern is an unread filter plus marking each message as
+  handled once its record exists.
+- **Self-sent test mail lands in Spam.** Gmail classified the 163.com → Gmail test
+  email as spam ("similar to messages that were identified as spam in the past").
+  The demo query sets `includeSpamTrash: true` so the walkthrough still completes;
+  in production that flag should be off, with spam handled separately.
+- **Gmail's `from` field is structured, not a string.** It arrives as an object
+  (`{text, value:[{address, name}]}`). Casting it directly yields `[object Object]`;
+  the `Shape Gmail Email` node unwraps it layer by layer.
 - Google Vision's synchronous `files:annotate` handles the first 5 pages of a PDF.
   Longer scanned documents need the asynchronous batch API with Cloud Storage.
 - OCR failures are non-fatal: the email continues to review rather than being dropped.
