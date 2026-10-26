@@ -26,3 +26,7 @@ node_modules/
 # ---- OS junk ----
 .DS_Store
 Thumbs.db
+*.pub
+id_*
+*.pem
+.env
